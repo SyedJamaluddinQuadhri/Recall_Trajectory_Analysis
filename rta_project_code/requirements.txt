@@ -1,0 +1,29 @@
+# RTA Requirements
+# Install: pip install -r requirements.txt
+
+# ── Core PyTorch (CUDA 12.1 for RTX 2050) ──
+# Install separately: pip install torch==2.2.0 --index-url https://download.pytorch.org/whl/cu121
+torch==2.2.0
+
+# ── HuggingFace stack ──
+transformers==4.40.0
+datasets==2.19.0
+accelerate==0.29.0
+bitsandbytes==0.43.0
+
+# ── ML / evaluation ──
+scikit-learn==1.4.2
+numpy==1.26.4
+scipy==1.13.0
+
+# ── Utilities ──
+pyyaml==6.0.1
+tqdm==4.66.2
+
+# ── Analysis / figures ──
+matplotlib==3.8.4
+seaborn==0.13.2
+jupyter==1.0.0
+
+# After installing:
+# python -m spacy download en_core_web_sm   (optional, for text preprocessing)

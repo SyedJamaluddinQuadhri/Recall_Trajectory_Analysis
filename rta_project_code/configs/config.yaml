@@ -1,0 +1,43 @@
+# RTA Master Configuration
+
+model:
+  name: "microsoft/phi-2"
+  use_4bit: true
+  n_layers: 32
+  hidden_dim: 2560
+
+stage1_tuned_lens:
+  corpus_sentences: 2000
+  n_epochs: 2
+  batch_size: 4
+  lr: 0.0001
+  max_length: 128
+  save_path: "models/tuned_lens_phi2.pt"
+
+stage2_dataset:
+  max_samples_per_source: 3000
+  max_new_tokens: 12
+  sources: ["popqa", "triviaqa"]
+
+stage3_classifier:
+  features:
+    - crystallization
+    - smoothness
+    - mlp_alignment
+    - early_presence
+    - final_entropy
+    - final_rank_normalized
+  n_epochs: 150
+  lr: 0.001
+  test_fraction: 0.2
+  crystallization_threshold: 0.5
+  early_presence_fraction: 0.33
+
+stage4_causal:
+  n_matched_pairs: 100
+  n_control_layers: 2
+  pilot_pairs: 20
+
+evaluation:
+  auroc_target: 0.80
+  results_dir: "evaluation/results"
