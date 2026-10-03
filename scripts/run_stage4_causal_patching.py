@@ -18,6 +18,13 @@ are directly comparable):
                 at the peak layer. Tests whether the causally relevant
                 content is in the combined residual, not just the MLP write.
 
+v6 CHANGE — adds attention mode (final Stage 4 sublayer decomposition):
+
+  attention     (new): replaces ONLY the self-attention sublayer output
+                at the peak layer, leaving MLP untouched. Three built-in
+                correctness checks run before the main loop. Results saved
+                to causal_patching_results_n{N}_s{seed}_attention.json.
+
 v3 FIXES (kept):
   - Passes the ALREADY-KNOWN answers from build_matched_pairs.py
     ("correct_model_answer" / "confab_model_answer") explicitly into
@@ -69,6 +76,11 @@ from src.causal.activation_patching import (
     run_residual_stream_patching_experiment,
     run_residual_specificity_check,
     run_residual_noise_control,
+    # Mode 4 — attention-only (new, final Stage 4 variant)
+    run_attention_patching_experiment,
+    run_attention_specificity_check,
+    run_attention_noise_control,
+    run_attention_correctness_checks,
 )
 from src.evaluation.benchmarks import summarize_causal_experiments
 
@@ -82,14 +94,15 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed for matched pair sampling and noise draws")
     parser.add_argument(
         "--patch-mode",
-        choices=["single_layer", "window", "residual_stream"],
+        choices=["single_layer", "window", "residual_stream", "attention"],
         default="single_layer",
         dest="patch_mode",
         help=(
             "Patching strategy: "
             "single_layer = existing baseline (peak MLP layer only); "
             "window = peak MLP layer ± 1 (3 layers simultaneously); "
-            "residual_stream = full block output (attention + MLP) at peak layer"
+            "residual_stream = full block output (attention + MLP) at peak layer; "
+            "attention = self-attention sublayer only at peak layer (MLP untouched)"
         ),
     )
     args = parser.parse_args()
@@ -159,6 +172,25 @@ def main():
         )
 
     baseline_norms = load_json(baseline_path)
+
+    # ── Attention-mode correctness checks (run before the main loop) ──────────
+    # Three quick checks (identity, position, hook-active) on the first 3 pairs
+    # to validate the hook before committing to the full n=400 run.
+    if args.patch_mode == "attention":
+        log.info("Running attention-mode correctness checks before main loop...")
+        # Use first 3 pairs; find peak layer from pair 0's correct trajectory
+        check_pairs = matched_pairs[:3]
+        check_traj = extract_trajectory(
+            model, tokenizer, lens, structure,
+            check_pairs[0]["correct_prompt"],
+            answer_text=check_pairs[0].get("correct_model_answer"),
+        )
+        check_layer = find_peak_confidence_layer(check_traj.prob_trajectory)
+        run_attention_correctness_checks(
+            model, tokenizer, lens, structure, baseline_norms,
+            sample_pairs=check_pairs,
+            target_layer=check_layer,
+        )
 
     target_results       = []
     layer_control_results = []
@@ -236,6 +268,28 @@ def main():
                 n_random_layers=2,
             )
             noise_result = run_residual_noise_control(
+                model, tokenizer, lens, structure,
+                pair["correct_prompt"], pair["confab_prompt"],
+                target_layer, baseline_norms,
+                correct_answer_text=correct_answer, confab_answer_text=confab_answer,
+                seed=args.seed * 10000 + i,
+            )
+
+        elif args.patch_mode == "attention":
+            result = run_attention_patching_experiment(
+                model, tokenizer, lens, structure,
+                pair["correct_prompt"], pair["confab_prompt"],
+                target_layer, baseline_norms,
+                correct_answer_text=correct_answer, confab_answer_text=confab_answer,
+            )
+            controls = run_attention_specificity_check(
+                model, tokenizer, lens, structure,
+                pair["correct_prompt"], pair["confab_prompt"],
+                target_layer, baseline_norms,
+                correct_answer_text=correct_answer, confab_answer_text=confab_answer,
+                n_random_layers=2,
+            )
+            noise_result = run_attention_noise_control(
                 model, tokenizer, lens, structure,
                 pair["correct_prompt"], pair["confab_prompt"],
                 target_layer, baseline_norms,

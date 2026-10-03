@@ -1,64 +1,63 @@
 {
-  "_ablation_methodology": "class-weighted MLP (6->16->1 ReLU, BCEWithLogitsLoss pos_weight=n_neg/n_pos, Adam lr=1e-3, 150 epochs/fold, best-AUROC tracking), StratifiedKFold(n_splits=5, shuffle=True, random_state=42), StandardScaler per fold. Corrected from v1 which used unweighted LogisticRegression.",
   "ablation": {
     "final_layer_only": {
-      "mean_auroc": 0.6321440254616272,
-      "std_auroc": 0.026186034719671174,
+      "mean_auroc": 0.6292549592757473,
+      "std_auroc": 0.024806900912954122,
       "fold_aurocs": [
-        0.6693231980950636,
-        0.6274768751717190,
-        0.5910901521381580,
-        0.6241152196898496,
-        0.6487146822133458
+        0.6560912171444271,
+        0.6300100741826175,
+        0.5850582266212406,
+        0.6260481526080828,
+        0.6490671258223684
       ],
       "n_features": 2
     },
     "+ crystallization": {
-      "mean_auroc": 0.6832836688240824,
-      "std_auroc": 0.020746934877162164,
+      "mean_auroc": 0.6818641219846097,
+      "std_auroc": 0.02423251846438743,
       "fold_aurocs": [
-        0.7072570748237018,
-        0.6697408187562963,
-        0.6512845835291353,
-        0.6857763304746240,
-        0.7023595365366542
+        0.7113783313490245,
+        0.6636047257074823,
+        0.6449442698543233,
+        0.6902718221334587,
+        0.6991214608787595
       ],
       "n_features": 3
     },
     "+ smoothness": {
-      "mean_auroc": 0.6873621949550371,
-      "std_auroc": 0.016967518875989743,
+      "mean_auroc": 0.6867867854127014,
+      "std_auroc": 0.017966995965588754,
       "fold_aurocs": [
-        0.7040516530817840,
-        0.6676563787892664,
-        0.6657788269501879,
-        0.7011131343984963,
-        0.6982109815554511
+        0.7054144152394908,
+        0.6623372103672498,
+        0.6679228589050752,
+        0.6970380051691729,
+        0.7012214373825189
       ],
       "n_features": 4
     },
     "full_RTA": {
-      "mean_auroc": 0.7125195696406601,
-      "std_auroc": 0.025355349439774880,
+      "mean_auroc": 0.7136449404329739,
+      "std_auroc": 0.021897587408026477,
       "fold_aurocs": [
-        0.7338932136642550,
-        0.6787086729553988,
-        0.6861581443843984,
-        0.7410530721334587,
-        0.7227847450657894
+        0.7360985438226944,
+        0.6880685044417987,
+        0.6873953683035714,
+        0.7360380932800752,
+        0.7206241923167294
       ],
       "n_features": 6
     }
   },
   "semantic_entropy_probe_baseline": {
     "method": "Semantic Entropy Probes (reproduced)",
-    "mean_auroc": 0.5653421564480149,
-    "std_auroc": 0.02885881660182617,
+    "mean_auroc": 0.6305141347215131,
+    "std_auroc": 0.017142195605012116,
     "probe_layer_fraction": 0.75
   },
   "efficiency": {
     "method": "RTA (ours)",
-    "avg_time_per_query_sec": 0.469,
+    "avg_time_per_query_sec": 0.397,
     "peak_vram_gb": 2.07,
     "forward_passes_per_query": 1,
     "requires_retrieval_index": false,

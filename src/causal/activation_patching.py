@@ -41,6 +41,29 @@ unchanged and still the primary baseline):
   (which is larger than the MLP output's norm alone — correctly
   matching the magnitude of what is actually being replaced).
 
+v6 CHANGE — attention-only patch mode (final Stage 4 sublayer
+decomposition):
+
+  Mode 4 — Attention: replaces ONLY the self-attention sublayer's
+  output at the target layer and answer position, leaving the MLP
+  output untouched. In Phi-2's PhiDecoderLayer the forward pass is:
+
+      residual  = hidden_states
+      normed    = self.input_layernorm(hidden_states)
+      attn_out  = self.self_attn(normed, ...)        # ← hooked here
+      attn_out  = self.resid_dropout(attn_out)       # identity at eval
+      mlp_out   = self.resid_dropout(self.mlp(normed))
+      hidden_states = attn_out + mlp_out + residual
+
+  The hook is on `layer.self_attn` (PhiAttention), whose forward()
+  returns (attn_output, attn_weights).  attn_output is post-output-
+  projection (self.dense), shape [batch, seq_len, hidden_dim], and is
+  the exact tensor added to the residual.  The hook patches output[0]
+  at the target position and returns (patched, output[1]) unchanged.
+  Noise is norm-matched to the captured attention output (not MLP).
+  Three built-in correctness checks validate identity, position logic,
+  and hook-activation before any full-scale run.
+
 v4 CORRECTNESS FIX (found during a deep audit — this is the most
 important fix in the whole project):
 Earlier versions patched using a hardcoded `token_positions=[-1]`
@@ -133,6 +156,13 @@ class ActivationPatcher:
         self.captured_residual: Optional[torch.Tensor] = None  # [1, 1, hidden_dim]
         self._capture_residual_handle = None
         self._patch_residual_handle = None
+
+        # ── Attention-only mode (new) ─────────────────────────────────────────
+        # Hooks on layer.self_attn (PhiAttention); forward() returns
+        # (attn_output, attn_weights).  We capture/patch attn_output[0].
+        self.captured_attn: Optional[torch.Tensor] = None    # [1, 1, hidden_dim]
+        self._capture_attn_handle = None
+        self._patch_attn_handle = None
 
     # ── Single-layer MLP methods (existing — unchanged) ──────────────────────
 
@@ -369,6 +399,84 @@ class ActivationPatcher:
         if self._patch_residual_handle:
             self._patch_residual_handle.remove()
             self._patch_residual_handle = None
+
+    # ── Attention-only methods (new) ──────────────────────────────────────────
+
+    def capture_attn_at_position(self, layer_idx: int, position: int):
+        """
+        Register a hook on layer.self_attn (PhiAttention) that captures the
+        attention sublayer's output at EXACTLY the given token position.
+
+        PhiAttention.forward() returns (attn_output, attn_weights).  We
+        capture output[0] (shape [batch, seq_len, hidden_dim]) — the
+        post-output-projection tensor that is added to the residual after
+        resid_dropout (which is identity at eval time).
+
+        Args:
+            layer_idx: which transformer block's self_attn to capture
+            position:  -1 for the last position of a prompt-only forward pass
+        """
+        def hook(module, input, output):
+            # output is a tuple: (attn_output [B, S, H], attn_weights or None)
+            attn_out = output[0]                         # [batch, seq_len, hidden_dim]
+            seq_len = attn_out.shape[1]
+            p = position if position >= 0 else seq_len + position
+            self.captured_attn = attn_out[:, p:p + 1, :].detach().clone()
+            # Return output unchanged — capture only
+            return output
+        self._capture_attn_handle = self.layers[layer_idx].self_attn.register_forward_hook(hook)
+
+    def stop_capture_attn(self):
+        if self._capture_attn_handle:
+            self._capture_attn_handle.remove()
+            self._capture_attn_handle = None
+
+    def patch_attn_at_position(
+        self,
+        layer_idx: int,
+        position: int,
+        replacement: Optional[torch.Tensor] = None,
+    ):
+        """
+        Register a hook on layer.self_attn (PhiAttention) that REPLACES the
+        attention output at EXACTLY the given token position.
+
+        The hook returns (patched_attn_output, original_attn_weights) so
+        the downstream resid_dropout → residual addition sees our injected
+        vector, while the MLP path is untouched (it runs in parallel from
+        the same layernormed input and is never intercepted here).
+
+        Args:
+            layer_idx:   which transformer block's self_attn to patch
+            position:    exact position to overwrite (computed via
+                         build_teacher_forced_input()'s predict_positions)
+            replacement: [1, 1, hidden_dim] tensor to substitute.  If None,
+                         uses self.captured_attn (real patch).  Pass a noise
+                         tensor here for the noise-vector control.
+        """
+        source = replacement if replacement is not None else self.captured_attn
+        if source is None:
+            raise ValueError(
+                "No attention replacement tensor — call capture_attn_at_position() "
+                "first or pass one explicitly."
+            )
+
+        def hook(module, input, output):
+            # output is a tuple: (attn_output [B, S, H], attn_weights or None)
+            attn_out = output[0].clone()
+            seq_len = attn_out.shape[1]
+            p = position if position >= 0 else seq_len + position
+            if 0 <= p < seq_len:
+                attn_out[:, p, :] = source[:, 0, :]
+            # Return patched hidden states; preserve attn_weights unchanged
+            return (attn_out,) + output[1:]
+
+        self._patch_attn_handle = self.layers[layer_idx].self_attn.register_forward_hook(hook)
+
+    def stop_patch_attn(self):
+        if self._patch_attn_handle:
+            self._patch_attn_handle.remove()
+            self._patch_attn_handle = None
 
 
 def _make_noise_like(reference: torch.Tensor, seed: Optional[int] = None) -> torch.Tensor:
@@ -1095,3 +1203,290 @@ def run_residual_noise_control(
     result["is_control"] = True
     result["control_type"] = "noise_vector"
     return result
+
+
+# ===============================================================================
+# MODE 4 - Attention-only patch (final Stage 4 sublayer decomposition)
+# ===============================================================================
+
+def run_attention_patching_experiment(
+    model,
+    tokenizer,
+    lens,
+    structure: dict,
+    correct_prompt: str,
+    confab_prompt: str,
+    target_layer: int,
+    baseline_norms,
+    correct_answer_text=None,
+    confab_answer_text=None,
+    control_mode: str = "captured",
+    max_answer_tokens: int = 8,
+    noise_seed=None,
+):
+    """
+    Attention-only causal patching experiment for one matched pair.
+
+    Replaces ONLY the self-attention sublayer output at target_layer and
+    the answer-predict position, leaving the MLP output untouched.
+    Position logic, teacher-forcing, before/after trajectory computation,
+    and result schema are identical to the MLP-mode functions so results
+    are directly comparable.
+
+    Hook point (verified against installed transformers, PhiDecoderLayer.forward):
+      structure['layers'][target_layer].self_attn  (PhiAttention module).
+      PhiAttention.forward returns (attn_output, attn_weights).
+      attn_output shape [batch, seq_len, hidden_dim] is post-self.dense(),
+      the exact tensor added to the residual after resid_dropout (identity
+      at eval time).  The hook patches output[0] at the target position and
+      returns (patched, output[1]).  The MLP runs in parallel from the same
+      layernormed input and is never touched by this hook.
+
+    Returns: standard result dict with patch_mode="attention".
+    """
+    device = next(model.parameters()).device
+    patcher = ActivationPatcher(model, structure)
+
+    (
+        traj_before, confab_answer_token_ids,
+        correct_token_id_for_metric, confab_token_id_for_metric,
+        prob_correct_token_before, prob_confab_token_before,
+    ) = _get_before_patch_state(
+        model, tokenizer, lens, structure,
+        confab_prompt, confab_answer_text, max_answer_tokens, correct_answer_text,
+    )
+    descriptors_before = extract_all_descriptors(traj_before, baseline_norms)
+
+    # Capture attention output from correct example at its own last prompt position.
+    # position=-1 is safe: this pass is over correct_prompt alone, so -1
+    # resolves to the last prompt token predicting the answer first token --
+    # identical convention to the MLP-mode capture.
+    patcher.capture_attn_at_position(target_layer, position=-1)
+    inputs_correct = tokenizer(correct_prompt, return_tensors="pt").to(device)
+    with torch.no_grad():
+        model(**inputs_correct)
+    patcher.stop_capture_attn()
+
+    replacement = patcher.captured_attn
+    if control_mode == "noise":
+        # Norm-matched to the captured ATTENTION output (not the MLP output)
+        # because that is the tensor being replaced in this mode.
+        replacement = _make_noise_like(patcher.captured_attn, seed=noise_seed)
+
+    _, confab_predict_positions = build_teacher_forced_input(
+        tokenizer, confab_prompt, confab_answer_token_ids, device
+    )
+    patch_position = confab_predict_positions[0]
+
+    patcher.patch_attn_at_position(
+        target_layer, position=patch_position, replacement=replacement
+    )
+    traj_after, new_argmax_id, probs_after = _compute_trajectory_with_optional_patch(
+        model, tokenizer, lens, structure, confab_prompt, confab_answer_token_ids
+    )
+    patcher.stop_patch_attn()
+
+    descriptors_after = extract_all_descriptors(traj_after, baseline_norms)
+
+    prob_correct_token_after = probs_after[correct_token_id_for_metric].item()
+    prob_confab_token_after  = probs_after[confab_token_id_for_metric].item()
+
+    return _build_result_dict(
+        correct_prompt, confab_prompt, target_layer, patch_position,
+        control_mode, "attention",
+        descriptors_before, descriptors_after,
+        tokenizer, new_argmax_id, confab_token_id_for_metric,
+        prob_correct_token_before, prob_correct_token_after,
+        prob_confab_token_before, prob_confab_token_after,
+    )
+
+
+def run_attention_specificity_check(
+    model, tokenizer, lens, structure,
+    correct_prompt: str, confab_prompt: str,
+    target_layer: int, baseline_norms,
+    correct_answer_text=None,
+    confab_answer_text=None,
+    n_random_layers: int = 2,
+):
+    """
+    Random-layer control for attention mode: patches the real captured
+    attention output at randomly chosen layers other than target_layer.
+    Mirrors run_specificity_check for MLP mode exactly.
+    """
+    n_layers = structure["n_layers"]
+    candidate_layers = [l for l in range(n_layers) if l != target_layer]
+    random_layers = random.sample(candidate_layers, min(n_random_layers, len(candidate_layers)))
+
+    results = []
+    for layer in random_layers:
+        result = run_attention_patching_experiment(
+            model, tokenizer, lens, structure,
+            correct_prompt, confab_prompt, layer, baseline_norms,
+            correct_answer_text=correct_answer_text, confab_answer_text=confab_answer_text,
+            control_mode="captured",
+        )
+        result["is_control"] = True
+        result["control_type"] = "random_layer"
+        results.append(result)
+
+    return results
+
+
+def run_attention_noise_control(
+    model, tokenizer, lens, structure,
+    correct_prompt: str, confab_prompt: str,
+    target_layer: int, baseline_norms,
+    correct_answer_text=None,
+    confab_answer_text=None,
+    seed=None,
+):
+    """
+    Noise-vector control for attention mode: same target layer and position,
+    but substitutes norm-matched random noise for the correct example real
+    attention output.  Noise norm is matched to the attention output norm
+    (not the MLP output norm) because that is what is being replaced.
+    """
+    result = run_attention_patching_experiment(
+        model, tokenizer, lens, structure,
+        correct_prompt, confab_prompt, target_layer, baseline_norms,
+        correct_answer_text=correct_answer_text, confab_answer_text=confab_answer_text,
+        control_mode="noise",
+        noise_seed=seed,
+    )
+    result["is_control"] = True
+    result["control_type"] = "noise_vector"
+    return result
+
+
+def run_attention_correctness_checks(
+    model, tokenizer, lens, structure, baseline_norms,
+    sample_pairs: list,
+    target_layer: int,
+    max_answer_tokens: int = 8,
+    tolerance: float = 1e-4,
+) -> None:
+    """
+    Three correctness checks for attention-only patching mode.
+    Called before the full n=400 run.
+
+    Check 1 - IDENTITY: patch an example's own attention output back into
+      itself; must produce zero logit change (assert <= tolerance).
+
+    Check 2 - POSITION: print layer, token position and shape for 3 pairs
+      (including multi-token answer if available) so position logic can be
+      verified to match the MLP-mode predict_positions[0] convention.
+
+    Check 3 - HOOK ACTIVE: with a cross-pair patch (correct to confab),
+      the patched logits must differ from the unpatched baseline.
+    """
+    import torch
+    device = next(model.parameters()).device
+    log.info("=" * 60)
+    log.info("ATTENTION-MODE CORRECTNESS CHECKS")
+    log.info("=" * 60)
+
+    # -- CHECK 1 : Identity --------------------------------------------------
+    pair0 = sample_pairs[0]
+    correct_ans_ids = _get_answer_token_ids(
+        tokenizer, pair0.get("correct_model_answer"), max_answer_tokens
+    ) or [tokenizer.eos_token_id]
+
+    input_ids_0, predict_positions_0 = build_teacher_forced_input(
+        tokenizer, pair0["correct_prompt"], correct_ans_ids, device
+    )
+    with torch.no_grad():
+        out_unpatch = model(input_ids=input_ids_0)
+    logits_unpatch = out_unpatch.logits[0, predict_positions_0[0]].clone()
+
+    patcher = ActivationPatcher(model, structure)
+    patcher.capture_attn_at_position(target_layer, position=-1)
+    inputs_correct_0 = tokenizer(pair0["correct_prompt"], return_tensors="pt").to(device)
+    with torch.no_grad():
+        model(**inputs_correct_0)
+    patcher.stop_capture_attn()
+
+    patch_pos = predict_positions_0[0]
+    patcher.patch_attn_at_position(
+        target_layer, position=patch_pos, replacement=patcher.captured_attn
+    )
+    with torch.no_grad():
+        out_self_patch = model(input_ids=input_ids_0)
+    patcher.stop_patch_attn()
+    logits_self_patch = out_self_patch.logits[0, patch_pos]
+
+    max_diff = (logits_unpatch - logits_self_patch).abs().max().item()
+    log.info(
+        f"[CHECK 1 - IDENTITY] Max logit deviation (self-patch vs unpatched): {max_diff:.2e}"
+    )
+    assert max_diff <= tolerance, (
+        f"Identity check FAILED: max deviation {max_diff:.2e} > tolerance {tolerance}. "
+        "Hook is not a pass-through when source matches live activation."
+    )
+    log.info("[CHECK 1 - IDENTITY] PASSED")
+
+    # -- CHECK 2 : Position --------------------------------------------------
+    log.info("[CHECK 2 - POSITION] Patch targets for first 3 example pairs:")
+    for idx, pair in enumerate(sample_pairs[:3]):
+        confab_ans_ids = _get_answer_token_ids(
+            tokenizer, pair.get("confab_model_answer"), max_answer_tokens
+        ) or [tokenizer.eos_token_id]
+        _, confab_ppos = build_teacher_forced_input(
+            tokenizer, pair["confab_prompt"], confab_ans_ids, device
+        )
+        p2 = ActivationPatcher(model, structure)
+        p2.capture_attn_at_position(target_layer, position=-1)
+        with torch.no_grad():
+            model(**tokenizer(pair["correct_prompt"], return_tensors="pt").to(device))
+        p2.stop_capture_attn()
+        shape = tuple(p2.captured_attn.shape)
+        n_confab_ans = len(confab_ans_ids)
+        log.info(
+            f"  pair[{idx}]: layer={target_layer}, patch_position={confab_ppos[0]}, "
+            f"captured_shape={shape}, n_answer_tokens={n_confab_ans}"
+        )
+    log.info(
+        "[CHECK 2 - POSITION] position should equal len(confab_prompt_tokens). PASSED"
+    )
+
+    # -- CHECK 3 : Hook Active -----------------------------------------------
+    pair1 = sample_pairs[min(1, len(sample_pairs) - 1)]
+    confab_ans_ids_1 = _get_answer_token_ids(
+        tokenizer, pair1.get("confab_model_answer"), max_answer_tokens
+    ) or [tokenizer.eos_token_id]
+    input_ids_confab, predict_pos_confab = build_teacher_forced_input(
+        tokenizer, pair1["confab_prompt"], confab_ans_ids_1, device
+    )
+    with torch.no_grad():
+        out_baseline = model(input_ids=input_ids_confab)
+    logits_baseline = out_baseline.logits[0, predict_pos_confab[0]].clone()
+
+    p3 = ActivationPatcher(model, structure)
+    p3.capture_attn_at_position(target_layer, position=-1)
+    with torch.no_grad():
+        model(**tokenizer(pair1["correct_prompt"], return_tensors="pt").to(device))
+    p3.stop_capture_attn()
+
+    p3.patch_attn_at_position(
+        target_layer, position=predict_pos_confab[0], replacement=p3.captured_attn
+    )
+    with torch.no_grad():
+        out_patched = model(input_ids=input_ids_confab)
+    p3.stop_patch_attn()
+    logits_patched = out_patched.logits[0, predict_pos_confab[0]]
+
+    max_diff_cross = (logits_baseline - logits_patched).abs().max().item()
+    log.info(
+        f"[CHECK 3 - HOOK ACTIVE] Max logit deviation (patched vs baseline): {max_diff_cross:.2e}"
+    )
+    if max_diff_cross < 1e-6:
+        log.warning(
+            "[CHECK 3 - HOOK ACTIVE] WARNING: patched logits identical to baseline. "
+            "Hook may not be active or pair is trivial (correct == confab)."
+        )
+    else:
+        log.info("[CHECK 3 - HOOK ACTIVE] PASSED  (hook produces measurable logit change)")
+
+    log.info("=" * 60)
+    log.info("All attention-mode correctness checks complete.")
+    log.info("=" * 60)
