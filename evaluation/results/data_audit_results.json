@@ -1,0 +1,294 @@
+{
+  "part_a": {
+    "n_total": 6000,
+    "n_confabulated": 4478,
+    "n_correct": 1522,
+    "unique_subjects": 2862,
+    "unique_questions": 5884,
+    "exact_duplicate_questions": 116,
+    "near_dup_pairs_jaccard08": 329,
+    "examples_in_near_dup_pairs": 429,
+    "old_fold_total_subject_overlap": 193,
+    "old_fold_total_neardup_overlap": 358,
+    "old_fold_per_fold_subject_overlap": [
+      46,
+      37,
+      36,
+      43,
+      31
+    ],
+    "old_fold_per_fold_neardup_overlap": [
+      76,
+      70,
+      71,
+      81,
+      60
+    ],
+    "n_groups": 5716,
+    "singletons": 5536,
+    "largest_group": 17,
+    "mean_group_size": 1.05,
+    "dev_n": 4815,
+    "holdout_n": 1185,
+    "dev_confab_rate": 0.751,
+    "holdout_confab_rate": 0.728,
+    "splits_sha256": "3302f2f528b4ee2af77de4e64d25bd58c4fbe0ec4604fcb8059405907fca3d1b"
+  },
+  "part_b": {
+    "confound_baselines": {
+      "(a) log_popularity": {
+        "fold_aurocs": [
+          0.6286,
+          0.6453,
+          0.6502,
+          0.6465,
+          0.6327
+        ],
+        "mean": 0.6407,
+        "std": 0.0084
+      },
+      "(b) source_only": {
+        "fold_aurocs": [
+          0.6134,
+          0.612,
+          0.6141,
+          0.61,
+          0.6065
+        ],
+        "mean": 0.6112,
+        "std": 0.0027
+      },
+      "(c) qlen_subjfreq": {
+        "fold_aurocs": [
+          0.6513,
+          0.6536,
+          0.657,
+          0.6291,
+          0.6344
+        ],
+        "mean": 0.6451,
+        "std": 0.0111
+      },
+      "(d) all_confounds": {
+        "fold_aurocs": [
+          0.6636,
+          0.6671,
+          0.6746,
+          0.6562,
+          0.6583
+        ],
+        "mean": 0.664,
+        "std": 0.0066
+      }
+    },
+    "rta_grouped_cv": {
+      "6_feature": {
+        "fold_aurocs": [
+          0.7165,
+          0.6949,
+          0.7014,
+          0.7175,
+          0.7081
+        ],
+        "mean": 0.7077,
+        "std": 0.0087,
+        "old_reported": 0.7104,
+        "drop": -0.0027
+      },
+      "128_feature": {
+        "fold_aurocs": [
+          0.7913,
+          0.7806,
+          0.8126,
+          0.7788,
+          0.7762
+        ],
+        "mean": 0.7879,
+        "std": 0.0134,
+        "old_reported": 0.792,
+        "drop": -0.0041
+      }
+    },
+    "incremental_value": {
+      "confounds_only": {
+        "fold_aurocs": [
+          0.6636,
+          0.6671,
+          0.6746,
+          0.6562,
+          0.6583
+        ],
+        "mean": 0.664
+      },
+      "conf_plus_rta6": {
+        "fold_aurocs": [
+          0.735,
+          0.7363,
+          0.7348,
+          0.7415,
+          0.7333
+        ],
+        "mean": 0.7362,
+        "std": 0.0033,
+        "gain": 0.0721,
+        "gain_ci": [
+          0.0649,
+          0.08
+        ]
+      },
+      "conf_plus_rta128": {
+        "fold_aurocs": [
+          0.7952,
+          0.7779,
+          0.8154,
+          0.7721,
+          0.7751
+        ],
+        "mean": 0.7871,
+        "std": 0.0163,
+        "gain": 0.1234,
+        "gain_ci": [
+          0.1142,
+          0.134
+        ]
+      }
+    },
+    "by_source": {
+      "popqa": {
+        "n": 2397,
+        "confab_rate": 0.834,
+        "auroc": 0.6446,
+        "ci": [
+          0.6146,
+          0.6742
+        ]
+      },
+      "triviaqa": {
+        "n": 2418,
+        "confab_rate": 0.668,
+        "auroc": 0.7172,
+        "ci": [
+          0.6947,
+          0.7384
+        ]
+      }
+    },
+    "by_quintile": {
+      "Q1": {
+        "n": 484,
+        "pop_range": [
+          0.0,
+          130.0
+        ],
+        "confab_rate": 0.85537189245224,
+        "auroc": 0.5103189884937281,
+        "ci": [
+          0.4417365754914599,
+          0.5808250737183787
+        ]
+      },
+      "Q2": {
+        "n": 477,
+        "pop_range": [
+          130.0,
+          318.0
+        ],
+        "confab_rate": 0.8742138147354126,
+        "auroc": 0.6823954490763401,
+        "ci": [
+          0.6121376856186627,
+          0.7459655698299268
+        ]
+      },
+      "Q3": {
+        "n": 477,
+        "pop_range": [
+          318.0,
+          911.5999999999999
+        ],
+        "confab_rate": 0.8637316823005676,
+        "auroc": 0.6232523983863464,
+        "ci": [
+          0.5532388114972278,
+          0.6979218833537705
+        ]
+      },
+      "Q4": {
+        "n": 479,
+        "pop_range": [
+          911.5999999999999,
+          4974.200000000001
+        ],
+        "confab_rate": 0.849686861038208,
+        "auroc": 0.6367092067864043,
+        "ci": [
+          0.5650253463770615,
+          0.7020932833322001
+        ]
+      },
+      "Q5": {
+        "n": 480,
+        "pop_range": [
+          4974.200000000001,
+          15101521.0
+        ],
+        "confab_rate": 0.7270833253860474,
+        "auroc": 0.6532358823626323,
+        "ci": [
+          0.5916464219321362,
+          0.7141746905264114
+        ]
+      }
+    }
+  },
+  "part_c": {
+    "lenient_flip_count_total": 95,
+    "lenient_flip_fraction_of_confab": 0.02121482804823582,
+    "lenient_by_source": {
+      "popqa": {
+        "n_confabulated": 2483,
+        "n_flip": 17,
+        "flip_rate": 0.00684655658477648
+      },
+      "triviaqa": {
+        "n_confabulated": 1995,
+        "n_flip": 78,
+        "flip_rate": 0.039097744360902256
+      }
+    },
+    "sensitivity": {
+      "original": {
+        "fold_aurocs": [
+          0.7165,
+          0.6949,
+          0.7014,
+          0.7175,
+          0.7081
+        ],
+        "mean": 0.7077
+      },
+      "remove_flagged": {
+        "fold_aurocs": [
+          0.7056261770244822,
+          0.6853578154425612,
+          0.728565535124941,
+          0.7402630649717514,
+          0.7048768269684111
+        ],
+        "mean": 0.7129378839064293,
+        "std": 0.019339032425730217
+      },
+      "relabel_flagged": {
+        "fold_aurocs": [
+          0.7287997119751854,
+          0.7075423223125884,
+          0.7086075108009305,
+          0.706445588755304,
+          0.6957904065581035
+        ],
+        "mean": 0.7094371080804225,
+        "std": 0.010717933799473072
+      }
+    }
+  }
+}
